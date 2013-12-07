@@ -47,17 +47,20 @@ type Problem struct {
     Output string `json:"output"bson:"output"`
 
     Time uint8 `json:"time"bson:"time"` // second
-    Mem uint32 `json:"mem"bson:"mem"` // MB
+    Memory int `json:"memory"bson:"memory"` // MB
 
-    ProId int `json:"pro_id"bson:"pro_id"`
+    Submit int `json:"submit"bson:"submit"`
+    Solved int `json:"solved"bson:"solved"`
+
+    PId int `json:"pid"bson:"pid"`
 }
 
-type ProId struct {
-    ProId int `json:"pro_id"bson:"pro_id"`
+type PId struct {
+    PId int `json:"pid"bson:"pid"`
 }
 
-// POST /new
-func (s *RsServer) newProblem(w http.ResponseWriter, r *http.Request) {
+// POST /pnew
+func (s *RsServer) pNew(w http.ResponseWriter, r *http.Request) {
     if r.Method != "POST" {
         http.Error(w, "only support POST method", 403)
         return
@@ -70,10 +73,10 @@ func (s *RsServer) newProblem(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    problem.ProId, err = s.getProId()
+    problem.PId, err = s.getPId()
     if err != nil {
         http.Error(w, "internal error", 599)
-        s.logger.Println("s.getProId failed", err)
+        s.logger.Println("s.getPId failed", err)
         return
     }
 
@@ -86,7 +89,7 @@ func (s *RsServer) newProblem(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    b, err := json.Marshal(&ProId{problem.ProId})
+    b, err := json.Marshal(&PId{problem.PId})
     if err != nil {
         s.logger.Println("json.Marshal failed", err)
         http.Error(w, "server error", 599)
@@ -97,30 +100,124 @@ func (s *RsServer) newProblem(w http.ResponseWriter, r *http.Request) {
     w.Write(b)
 }
 
-func (s *RsServer) getProId() (id int, err error) {
+func (s *RsServer) getPId() (id int, err error) {
 
     // TODO: lock
-    var idret ProId
-    c := s.session.DB("oj_rs").C("pro_id")
+    var idret PId
+    c := s.session.DB("oj_rs").C("pid")
     err = c.Find(nil).One(&idret)
     if err != nil {
         return
     }
 
-    id = idret.ProId
-    err = c.Update(bson.M{"pro_id": idret.ProId}, bson.M{"pro_id": idret.ProId+1})
+    id = idret.PId
+    err = c.Update(bson.M{"pid": idret.PId}, bson.M{"pid": idret.PId+1})
     if err != nil {
         return
     }
     return
 }
 
+// POST /pupdate/<pid>
+func (s *RsServer) pUpdate(w http.ResponseWriter, r *http.Request) {
 
-var proSelector = bson.M{"_id": 0}
-var sortByPid = "pro_id"
+    pid, err := strconv.Atoi(r.URL.Path[9:])
+    if err != nil {
+        http.Error(w, "invalid args", 400)
+        return
+    }
 
-// GET /list/limit/<limit>/last/<last_pid>/source/<source>
-func (s *RsServer) list(w http.ResponseWriter, r *http.Request) {
+    var p1 Problem
+    err = loadJson(r.Body, &p1)
+    if err != nil {
+        http.Error(w, "invalid args", 400)
+        return
+    }
+
+    p2 := make(map[string]interface{})
+    if p1.Title != "" {
+        p2["title"] = p1.Title
+    }
+    if p1.Source != "" {
+        p2["source"] = p1.Source
+    }
+    if p1.Description != "" {
+        p2["description"] = p1.Description
+    }
+    if p1.DesIn != "" {
+        p2["des_in"] = p1.DesIn
+    }
+    if p1.DesOut != "" {
+        p2["des_out"] = p1.DesOut
+    }
+    if p1.SampleIn != "" {
+        p2["sample_in"] = p1.SampleIn
+    }
+    if p1.SampleOut != "" {
+        p2["sample_out"] = p1.SampleOut
+    }
+    if p1.Input != "" {
+        p2["input"] = p1.Input
+    }
+    if p1.Output != "" {
+        p2["output"] = p1.Output
+    }
+    if p1.Memory > 0 {
+        p2["memory"] = p1.Memory
+    }
+    if p1.Time > 0 {
+        p2["time"] = p1.Time
+    }
+
+    fmt.Println(pid)
+    err = s.session.DB("oj_rs").C("problems").Update(bson.M{"pid": pid}, bson.M{"$set": p2})
+    if err == mgo.ErrNotFound {
+        http.Error(w, "not found problem", 400)
+        return
+    } else if err != nil {
+        http.Error(w, "internal error", 599)
+        s.logger.Println("mgo update failed:", err)
+        return
+    }
+
+    w.WriteHeader(200)
+}
+
+var pGetSelector = bson.M{"_id": 0}
+var pListSelector = bson.M{"_id": 0, "pid": 1, "title": 1, "source": 1, "submit": 1, "solved": 1}
+var sortByPid = "pid"
+
+// get /pget/<pid>
+func (s *RsServer) pGet(w http.ResponseWriter, r *http.Request) {
+
+    pid, err := strconv.Atoi(r.URL.Path[6:])
+    if err != nil {
+        http.Error(w, "invalid args", 400)
+        return
+    }
+    fmt.Println("pget", pid)
+
+    var problem Problem
+    err = s.session.DB("oj_rs").C("problems").Find(bson.M{"pid": pid}).Select(pGetSelector).One(&problem)
+    if err != nil {
+        fmt.Println(err)
+        http.Error(w, "cannot find such problem", 430)
+        return
+    }
+
+    b, err := json.Marshal(&problem)
+    if err != nil {
+        http.Error(w, "internal error", 599)
+        s.logger.Println("json.Marshal error:", err, problem)
+        return
+    }
+
+    w.WriteHeader(200)
+    w.Write(b)
+}
+
+// GET /plist/limit/<limit>/last/<last_pid>/source/<source>
+func (s *RsServer) pList(w http.ResponseWriter, r *http.Request) {
     args := parseUrl(r.URL.Path[1:])
 
     query, err := checkProQuery(args)
@@ -129,7 +226,7 @@ func (s *RsServer) list(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    q := s.session.DB("oj_rs").C("problems").Find(query).Select(proSelector).Sort(sortByPid)
+    q := s.session.DB("oj_rs").C("problems").Find(query).Select(pListSelector).Sort(sortByPid)
     var limit int
     if v, ok := args["limit"]; ok {
         limit, err = strconv.Atoi(v)
@@ -152,7 +249,7 @@ func (s *RsServer) list(w http.ResponseWriter, r *http.Request) {
 
     ret["items"] = rst
     if limit > 0 && len(rst) == limit {
-        ret["last"] = rst[limit-1].ProId
+        ret["last"] = rst[limit-1].PId
     }
 
     b, _ := json.Marshal(&ret)
@@ -172,7 +269,7 @@ func checkProQuery(args map[string]string) (query bson.M, err error) {
         if err != nil {
             return
         }
-        query["pro_id"] = bson.M{"$gt": last}
+        query["pid"] = bson.M{"$gt": last}
     }
     return
 }
@@ -190,8 +287,10 @@ func parseUrl(url string) (args map[string]string) {
 
 func (s *RsServer) Register() {
 
-    http.HandleFunc("/new", s.newProblem)
-    http.HandleFunc("/list/", s.list)
+    http.HandleFunc("/pnew", s.pNew)
+    http.HandleFunc("/pupdate/", s.pUpdate)
+    http.HandleFunc("/plist/", s.pList)
+    http.HandleFunc("/pget/", s.pGet)
 }
 
 func NewRsServer() (s *RsServer, err error) {
@@ -219,10 +318,10 @@ file, err := os.OpenFile("rs.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 
 func initDB(session *mgo.Session) (err error) {
     var rst interface{}
-    c := session.DB("oj_rs").C("pro_id")
+    c := session.DB("oj_rs").C("pid")
     err = c.Find(bson.M{}).One(rst)
     if err != nil {
-        err = c.Insert(bson.M{"pro_id": 0})
+        err = c.Insert(bson.M{"pid": 0})
         if err != nil {
             return
         }
